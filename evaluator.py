@@ -1,11 +1,13 @@
 # ============================================================
 # EVALUATOR — TinyKAN + XAI
 # ============================================================
-import torch, torch.nn as nn, numpy as np
+import torch, torch.nn as nn, numpy as np, gc, os
 from kan import KAN
 from sentence_transformers import SentenceTransformer
 from dataclasses import dataclass
 from typing import List
+
+torch.set_num_threads(int(os.environ.get('TORCH_THREADS', '1')))
 
 class TinyKANDistilled(nn.Module):
     def __init__(self, input_dim=9, grid=3):
@@ -41,8 +43,26 @@ class KANEvaluator:
         self.model.load_state_dict(torch.load(model_path, map_location=self.device, weights_only=False))
         self.model.eval()
         print(f"[Evaluator] TinyKAN loaded ✅ ({sum(p.numel() for p in self.model.parameters()):,} params)")
-        self.encoders = {n: SentenceTransformer(p, device=self.device) for n,p in self.ENCODERS.items()}
-        print("[Evaluator] Encoders loaded ✅")
+        self.encoders = {}
+        for name, path in self.ENCODERS.items():
+            enc = SentenceTransformer(path, device=self.device)
+            enc.eval()
+            self._quantize(enc, name)
+            self.encoders[name] = enc
+            gc.collect()
+        print("[Evaluator] Encoders loaded ✅ (dynamically quantized, int8)")
+
+    def _quantize(self, sentence_transformer, name):
+        """Applies dynamic int8 quantization to the Linear layers of the
+        underlying HF transformer to reduce resident memory on CPU.
+        Falls back silently (keeps full precision) if unsupported."""
+        try:
+            inner = sentence_transformer[0].auto_model
+            quantized = torch.quantization.quantize_dynamic(
+                inner, {torch.nn.Linear}, dtype=torch.qint8)
+            sentence_transformer[0].auto_model = quantized
+        except Exception as e:
+            print(f"[Evaluator] Quantization skipped for {name}: {e}")
 
     def _features(self, s1, s2):
         cos = []
@@ -94,3 +114,4 @@ class KANEvaluator:
                          confidence=min(min([abs(score-t) for t,_ in self.CEFR_LEVELS])*2,1.0),
                          gate_kan=float(gates[0]), gate_linear=float(gates[1]),
                          features=feat, importance=imp, feedback=fb, xai_explanation=xai)
+
