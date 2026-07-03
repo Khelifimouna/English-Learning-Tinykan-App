@@ -3,7 +3,7 @@ services:
     name: english-learning-tinykan
     env: python
     plan: free
-    buildCommand: "pip install -r requirements.txt"
+    buildCommand: "pip install -r requirements.txt && python -c \"from sentence_transformers import SentenceTransformer; [SentenceTransformer(m) for m in ['sentence-transformers/all-MiniLM-L6-v2','sentence-transformers/all-mpnet-base-v2','sentence-transformers/stsb-roberta-base']]\""
     startCommand: "python main.py"
     envVars:
       - key: GEMINI_API_KEY
